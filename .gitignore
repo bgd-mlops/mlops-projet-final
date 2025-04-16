@@ -1,0 +1,18 @@
+# Fichiers Python compilés
+__pycache__/
+*.pyc
+
+# Logs Airflow
+logs/
+
+# Fichiers temporaires de Docker
+*.pid
+
+# Fichiers générés par Airflow (DAG compilés)
+dags/__pycache__/
+
+# Fichiers VS Code
+.vscode/
+
+# Fichiers système
+.DS_Store
