@@ -19,8 +19,14 @@ def run_python_script(script_path):
     par exemple : /opt/airflow/scripts/insert_metadata.py
     """
     command = ["python3", script_path]
-    # subprocess.run lance la commande et check=True lève une exception si returncode != 0
-    subprocess.run(command, check=True)
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        print(result.stdout)  
+    except subprocess.CalledProcessError as e:
+        print(f"Error executing script: {e}")
+        print(f"Standard Output: {e.stdout}")
+        print(f"Standard Error: {e.stderr}")
+        raise
 
 
 with DAG(
@@ -63,5 +69,19 @@ with DAG(
         op_args=["/opt/airflow/scripts/download_and_upload_pictures.py"],
     )
 
+    # Tâche 5 : entraîner le modèle
+    train_model_task = PythonOperator(
+    task_id='train_model',
+    python_callable=run_python_script,
+    op_args=["/opt/airflow/scripts/train_model.py"],  # Ensure the correct path within the Airflow container
+    )
+
+    # Tâche 6 : enregistrement le modèle
+    save_model_task = PythonOperator(
+    task_id='save_model',
+    python_callable=run_python_script,
+    op_args=["/opt/airflow/scripts/save_model.py"],  # Ensure the correct path within the Airflow container
+    )
+
     # Orchestration : d'abord insérer les métadonnées, puis traiter les images
-    create_db_task >> create_table_task >> insert_metadata_task >> download_upload_pictures_task
+    create_db_task >> create_table_task >> insert_metadata_task >> download_upload_pictures_task >> train_model_task >> save_model_task
