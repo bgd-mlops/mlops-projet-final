@@ -76,12 +76,5 @@ with DAG(
     op_args=["/opt/airflow/scripts/train_model.py"],  # Ensure the correct path within the Airflow container
     )
 
-    # Tâche 6 : enregistrement le modèle
-    save_model_task = PythonOperator(
-    task_id='save_model',
-    python_callable=run_python_script,
-    op_args=["/opt/airflow/scripts/save_model.py"],  # Ensure the correct path within the Airflow container
-    )
-
     # Orchestration : d'abord insérer les métadonnées, puis traiter les images
-    create_db_task >> create_table_task >> insert_metadata_task >> download_upload_pictures_task >> train_model_task >> save_model_task
+    create_db_task >> create_table_task >> insert_metadata_task >> download_upload_pictures_task >> train_model_task 
