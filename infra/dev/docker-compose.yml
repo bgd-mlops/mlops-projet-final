@@ -1,0 +1,244 @@
+version: "3.8"
+
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.10.5
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # Désactive les DAGs d'exemple pour un projet propre
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    _PIP_ADDITIONAL_REQUIREMENTS: "psycopg2-binary requests boto3 torch torchvision scikit-learn mlflow tqdm"
+    PYTHONPATH: "/opt/airflow"
+  networks:
+      - mlops_net
+
+  volumes:
+      - "${PWD}/dags:/opt/airflow/dags"
+      - "${PWD}/logs:/opt/airflow/logs"
+      - "${PWD}/plugins:/opt/airflow/plugins"
+      - "${PWD}/scripts:/opt/airflow/scripts"
+      - "${PWD}/models:/opt/airflow/models"
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+
+services:
+
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    networks:
+      - mlops_net
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: [ "CMD", "pg_isready", "-U", "airflow" ]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    networks:
+      - mlops_net
+    volumes:
+      - "${PWD}/dags:/opt/airflow/dags"
+      - "${PWD}/logs:/opt/airflow/logs"
+      - "${PWD}/plugins:/opt/airflow/plugins"
+      - "${PWD}/scripts:/opt/airflow/scripts"
+      - "${PWD}/models:/opt/airflow/models"
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s  
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    networks:
+      - mlops_net
+    volumes:
+      - "${PWD}/dags:/opt/airflow/dags"
+      - "${PWD}/logs:/opt/airflow/logs"
+      - "${PWD}/plugins:/opt/airflow/plugins"
+      - "${PWD}/scripts:/opt/airflow/scripts"
+      - "${PWD}/models:/opt/airflow/models"
+    healthcheck:
+      test: [ "CMD", "curl", "--fail", "http://localhost:8974/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    command: triggerer
+    networks:
+      - mlops_net
+    volumes:
+      - "${PWD}/dags:/opt/airflow/dags"
+      - "${PWD}/logs:/opt/airflow/logs"
+      - "${PWD}/plugins:/opt/airflow/plugins"
+      - "${PWD}/scripts:/opt/airflow/scripts"
+      - "${PWD}/models:/opt/airflow/models"
+    healthcheck:
+      test: [ "CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"' ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    networks:
+      - mlops_net
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins
+        chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+        exec /entrypoint airflow version
+    volumes:
+      - "${PWD}/dags:/opt/airflow/dags"
+      - "${PWD}/logs:/opt/airflow/logs"
+      - "${PWD}/plugins:/opt/airflow/plugins"
+      - "${PWD}/scripts:/opt/airflow/scripts"
+      - "${PWD}/models:/opt/airflow/models"
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+      _PIP_ADDITIONAL_REQUIREMENTS: ''
+    user: "0:0"
+
+  # Service Minio pour le stockage S3 (images)
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    networks:
+      - mlops_net
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - minio-data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9000/minio/health/live || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: always
+
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    networks:
+      - mlops_net
+    environment:
+      MLFLOW_TRACKING_URI: http://0.0.0.0:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+      BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
+      ARTIFACT_ROOT: s3://mlflow-artifacts/
+    volumes:
+      - ./mlruns:/mlflow/artifacts
+      - ./mlflow-db:/mlflow 
+    ports:
+      - "5050:5000"
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:////mlflow/mlflow.db
+      --default-artifact-root s3://mlflow-artifacts/
+      --host 0.0.0.0
+      --port 5000
+    depends_on:
+      - minio
+    
+    restart: always
+
+
+  api:
+    build:
+      context: ../../src/api         # adjust to wherever your api Dockerfile lives
+      dockerfile: Dockerfile     # or whatever your api Dockerfile is named
+    image: api:dev
+    ports:
+      - "8000:8000"
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: minio
+      AWS_SECRET_ACCESS_KEY: minio123
+    networks:
+      - mlops_net
+    depends_on:
+      minio:
+        condition: service_started
+      mlflow:
+        condition: service_started
+      
+    
+
+  webapp:
+    build:
+      context: ../../src/webapp     # adjust to wherever your gradio app Dockerfile lives
+      dockerfile: Dockerfile
+    image: webapp:dev
+    ports:
+      - "7860:7860"
+    environment:
+      API_URL: http://api:8000/predict
+    networks:
+      - mlops_net
+    depends_on:
+      api:
+        condition: service_started
+      
+
+networks:
+  mlops_net: {}
+
+
+volumes:
+  postgres-db-volume:
+  minio-data:
+  mlflow-data:
