@@ -1,0 +1,90 @@
+# prod/k8s/airflow/values.yaml
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceAccount:
+  create : true
+
+# 1) Image + commandes
+image:
+  repository: apache/airflow
+  tag: "2.10.5"
+  pullPolicy: IfNotPresent
+
+command:
+  webserver: ["airflow", "webserver"]
+  scheduler: ["airflow", "scheduler"]
+  triggerer: ["airflow", "triggerer"]
+
+# 2) Ports exposés
+ports:
+  webserver: 8080
+  scheduler: 8974
+
+# 3) Variables d’environnement
+env:
+  - name: AIRFLOW__CORE__EXECUTOR
+    value: LocalExecutor
+  - name: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN
+    value: postgresql+psycopg2://airflow:airflow@postgres/airflow
+  - name: AIRFLOW__CORE__FERNET_KEY
+    value: ""
+  - name: AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION
+    value: "true"
+  - name: AIRFLOW__CORE__LOAD_EXAMPLES
+    value: "false"
+  - name: AIRFLOW__API__AUTH_BACKENDS
+    value: airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session
+  - name: AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK
+    value: "true"
+  - name: _PIP_ADDITIONAL_REQUIREMENTS
+    value: "psycopg2-binary requests boto3 torch torchvision scikit-learn mlflow tqdm"
+  - name: PYTHONPATH
+    value: "/opt/airflow"
+
+# 4) Persistances (volumes)
+persistence:
+  dags:
+    enabled: true
+    size: 1Gi
+  logs:
+    enabled: true
+    size: 1Gi
+  plugins:
+    enabled: true
+    size: 1Gi
+  scripts:
+    enabled: true
+    size: 1Gi
+  models:
+    enabled: true
+    size: 1Gi
+
+# 5) Healthchecks (leurs probes seront automatiquement utilisées
+#    sur les ports webserver et scheduler)
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+
+readinessProbeScheduler:
+  httpGet:
+    path: /health
+    port: 8974
+livenessProbeScheduler:
+  httpGet:
+    path: /health
+    port: 8974
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false

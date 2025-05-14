@@ -1,0 +1,32 @@
+replicaCount: 1
+image:
+  repository: ghcr.io/mlflow/mlflow
+  tag: "latest"
+
+serviceAccount:
+  create: false
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+
+service:
+  type: ClusterIP
+  port: 5000
+extraEnv:
+  - name: BACKEND_STORE_URI
+    value: sqlite:////data/mlflow.db
+  - name: ARTIFACT_ROOT
+    value: s3://mlflow-artifacts/
+  - name: MLFLOW_S3_ENDPOINT_URL
+    value: http://minio:9000
+  - name: AWS_ACCESS_KEY_ID
+    value: minio
+  - name: AWS_SECRET_ACCESS_KEY
+    value: minio123
+persistence:
+  enabled: true
+  size: 1Gi

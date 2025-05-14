@@ -1,0 +1,29 @@
+image:
+  repository: minio/minio
+  tag: "latest"
+
+serviceAccount:
+  create: false
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+global:
+  security:
+    allowInsecureImages: true
+
+auth:
+  rootUser: minio               
+  rootPassword: minio123
+
+service:
+  type: ClusterIP
+  port: 9000
+accessKey: minio
+secretKey: minio123
+persistence:
+  enabled: true
+  size: 1Gi

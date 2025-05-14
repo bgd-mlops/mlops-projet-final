@@ -1,0 +1,25 @@
+replicaCount: 1
+image:
+  repository: dandelion-webapp
+  tag: prod
+serviceAccount:
+  create: false
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+service:
+  type: ClusterIP
+  port: 7860
+extraEnv:
+  - name: MLFLOW_TRACKING_URI
+    value: http://mlflow:5000
+  - name: MLFLOW_S3_ENDPOINT_URL
+    value: http://minio:9000
+  - name: AWS_ACCESS_KEY_ID
+    value: minio
+  - name: AWS_SECRET_ACCESS_KEY
+    value: minio123

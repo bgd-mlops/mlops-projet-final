@@ -1,0 +1,6 @@
+apiVersion: v2
+name: airflow
+description: "Apache Airflow for mlops-stack"
+type: application
+version: 0.1.0      # bumpez à chaque grosse modif
+appVersion: "2.10.5"

@@ -1,0 +1,22 @@
+image:
+  repository: postgres
+  tag: "13"
+
+serviceAccount:
+  create: false
+
+ingress:
+  enabled: false
+
+autoscaling:
+  enabled: false
+
+service:
+  type: ClusterIP
+  port: 5432
+postgresUser: airflow
+postgresPassword: airflow
+postgresDatabase: airflow
+persistence:
+  enabled: true
+  size: 1Gi
