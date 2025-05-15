@@ -1,3 +1,4 @@
+
 # prod/k8s/airflow/values.yaml
 replicaCount: 1
 
@@ -10,14 +11,12 @@ serviceAccount:
 
 # 1) Image + commandes
 image:
-  repository: apache/airflow
-  tag: "2.10.5"
-  pullPolicy: IfNotPresent
+  repository: $CI_REGISTRY_IMAGE      # ou mon-registry/airflow-custom
+  tag:        "$CI_COMMIT_SHORT_SHA"  # version = hash court du commit CI
 
-command:
-  webserver: ["airflow", "webserver"]
-  scheduler: ["airflow", "scheduler"]
-  triggerer: ["airflow", "triggerer"]
+command: 
+  - "airflow"
+  - "standalone"
 
 # 2) Ports exposés
 ports:
@@ -44,6 +43,8 @@ env:
     value: "psycopg2-binary requests boto3 torch torchvision scikit-learn mlflow tqdm"
   - name: PYTHONPATH
     value: "/opt/airflow"
+  - name: PYTHONWARNINGS
+    value: "ignore::SyntaxWarning"
 
 # 4) Persistances (volumes)
 persistence:
@@ -63,16 +64,12 @@ persistence:
     enabled: true
     size: 1Gi
 
+
 # 5) Healthchecks (leurs probes seront automatiquement utilisées
 #    sur les ports webserver et scheduler)
-readinessProbe:
-  httpGet:
-    path: /health
-    port: 8080
-livenessProbe:
-  httpGet:
-    path: /health
-    port: 8080
+readinessProbe: {}
+livenessProbe: {}
+
 
 readinessProbeScheduler:
   httpGet:

@@ -1,22 +1,16 @@
-image:
-  repository: postgres
-  tag: "13"
+## prod/k8s/postgres/values.yaml
 
-serviceAccount:
-  create: false
+global:
+  postgresql:
+    postgresqlUsername: airflow
+    postgresqlPassword: airflow
+    postgresqlDatabase: airflow
 
-ingress:
-  enabled: false
-
-autoscaling:
-  enabled: false
+persistence:
+  enabled: true
+  size: 5Gi
+  # storageClass: standard
 
 service:
   type: ClusterIP
   port: 5432
-postgresUser: airflow
-postgresPassword: airflow
-postgresDatabase: airflow
-persistence:
-  enabled: true
-  size: 1Gi

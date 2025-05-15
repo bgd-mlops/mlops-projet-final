@@ -1,3 +1,11 @@
+fastapi
+uvicorn[standard]
+pillow
+torch
+torchvision
+mlflow
+boto3
+python-multipart
 gradio==3.50.1
 requests
 pillow
