@@ -1,0 +1,16 @@
+## prod/k8s/postgres/values.yaml
+
+global:
+  postgresql:
+    postgresqlUsername: airflow
+    postgresqlPassword: airflow
+    postgresqlDatabase: airflow
+
+persistence:
+  enabled: true
+  size: 5Gi
+  # storageClass: standard
+
+service:
+  type: ClusterIP
+  port: 5432

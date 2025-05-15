@@ -1,0 +1,88 @@
+---
+# Source: mlflow/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mlflow
+  labels:
+    helm.sh/chart: mlflow-0.1.0
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/instance: mlflow
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+automountServiceAccountToken:
+---
+# Source: mlflow/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  labels:
+    helm.sh/chart: mlflow-0.1.0
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/instance: mlflow
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5000
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/instance: mlflow
+---
+# Source: mlflow/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  labels:
+    helm.sh/chart: mlflow-0.1.0
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/instance: mlflow
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+      app.kubernetes.io/instance: mlflow
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: mlflow-0.1.0
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/instance: mlflow
+        app.kubernetes.io/version: "1.16.0"
+        app.kubernetes.io/managed-by: Helm
+    spec:
+      serviceAccountName: mlflow
+      containers:
+        - name: mlflow
+          image: "ghcr.io/mlflow/mlflow:latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+          livenessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /ping
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 1
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /ping
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+

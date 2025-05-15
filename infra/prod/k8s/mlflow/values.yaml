@@ -1,0 +1,70 @@
+## mlflow/values.yaml
+
+serviceAccount:
+  create: true
+
+autoscaling:
+  enabled: false
+
+image:
+  repository: ghcr.io/mlflow/mlflow
+  tag:        "latest"
+  pullPolicy: IfNotPresent
+
+command:
+  - mlflow
+
+args:
+  - server
+  - "--backend-store-uri=postgresql+psycopg2://postgres:${POSTGRES_PASSWORD}@postgres-postgresql.mlops.svc.cluster.local:5432/postgres"
+  - "--default-artifact-root"
+  - "s3://mlflow-artifacts/"
+  - "--host"
+  - "0.0.0.0"
+  - "--port"
+  - "5000"
+
+service:
+  type: ClusterIP
+  port:       5000
+  targetPort: 5000
+
+env:
+  - name: MLFLOW_S3_ENDPOINT_URL
+    value: http://minio.mlops.svc.cluster.local:9000
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: minio-credentials
+        key: accesskey
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: minio-credentials
+        key: secretkey
+
+persistence:
+  enabled: true
+  size: 1Gi
+  mountPath: /mlflow/mlruns
+
+readinessProbe:
+  httpGet:
+    path: /ping
+    port: 5000
+  initialDelaySeconds: 10
+  timeoutSeconds: 1
+  periodSeconds: 10
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /ping
+    port: 5000
+  initialDelaySeconds: 30
+  timeoutSeconds: 1
+  periodSeconds: 30
+  failureThreshold: 3
+
+ingress:
+  enabled: false
