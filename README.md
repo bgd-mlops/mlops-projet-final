@@ -40,7 +40,7 @@ Ce dépôt contient un projet de classification d’images permettant de disting
 ![Aperçu de Minio](images/image_minio.png)
 
 
-5. Environnements : développement / production
+## Environnements 
 
 Nous avons séparé deux environnements :
 
@@ -49,7 +49,7 @@ Production : déploiement sur Kubernetes via un Helm chart.
 
 Plusieurs micro-services s’exécutent déjà correctement dans le cluster ; Tous les micro-services ont été migrés vers le cluster, mais certains ne sont pas encore opérationnels.
 
-6. Organisation de Git : 
+## Organisation de Git : 
 
 - .env à la racine : Toutes les variables d’environnement (MLflow).
 - infra/ : définitions d’infrastructure
