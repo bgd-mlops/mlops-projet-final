@@ -78,8 +78,7 @@ def ensure_bucket(client, bucket_name):
             sys.exit(1)
 
 
-@task
-def train_model(epochs: int = 1, lr: float = 1e-4):
+def train_model(epochs: int = 10, lr: float = 1e-4):
     """
     Entraîne le modèle et le publie sur MLflow avec gestion du Model Registry.
     """
@@ -155,23 +154,28 @@ def train_model(epochs: int = 1, lr: float = 1e-4):
         scripted = torch.jit.script(model)
         mlflow.pytorch.log_model(
             pytorch_model=scripted,
-            artifact_path="model"
+            artifact_path="model",
+            code_paths=None  
+        )
+        run_id = mlflow.active_run().info.run_id
+        logged_model_uri = f"runs:/{run_id}/model"
+
+        # 3. Enregistrer dans le Model Registry
+        model_name = "DandelionGrassModel"
+        registered_model = mlflow.register_model(
+            logged_model_uri,
+            name=model_name
         )
 
-        run_id = mlflow.active_run().info.run_id
-        model_uri = f"runs:/{run_id}/model"
-
-        # Registry
+        # 4. Promouvoir la version en Production
         client = MlflowClient()
-        registered = client.create_registered_model(os.getenv("MLFLOW_MODEL_NAME")) if not client.get_registered_model(os.getenv("MLFLOW_MODEL_NAME"), False) else None
-        version = mlflow.register_model(model_uri, os.getenv("MLFLOW_MODEL_NAME"))
         client.transition_model_version_stage(
-            name=os.getenv("MLFLOW_MODEL_NAME"),
-            version=version.version,
+            name=model_name,
+            version=registered_model.version,
             stage="Production",
             archive_existing_versions=True
         )
-        logger.info(f"Modèle v{version.version} promu en Production")
+        logger.info(f"Modèle promu en Production")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,37 @@
+name: CI - Docker Services Check
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  docker-up-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Docker Compose
+        run: docker-compose -f docker-compose.yml up -d
+
+      - name: Wait for services to be healthy
+        run: |
+          TIMEOUT=60
+          INTERVAL=5
+          ELAPSED=0
+
+          while [[ $(docker-compose ps -q | xargs docker inspect --format='{{ .Name }}: {{ .State.Health.Status }}' | grep -v healthy | wc -l) -gt 0 ]]; do
+            if [ $ELAPSED -ge $TIMEOUT ]; then
+              echo "Timeout waiting for services to become healthy"
+              docker-compose ps
+              exit 1
+            fi
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+      - name: Tear down
+        if: always()
+        run: docker-compose down

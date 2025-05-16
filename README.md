@@ -15,12 +15,22 @@ Ce dépôt contient un projet de classification d’images permettant de disting
 
 2. Lancez l’infrastructure avec Docker Compose :
 
+    ```bash
     docker-compose up -d --build
 
-3. Démarrez la DAG "full_pipeline" dans Airflow 
+3. Démarrez la DAG "full_pipeline" dans Airflow
 
     Accédez aux différentes interfaces :
-        Interface Airflow : http://localhost:8080
-        Web app de classification (Gradio) : http://localhost:7860
+    - Interface Airflow : [http://localhost:8080](http://localhost:8080)
+    - Web app de classification (Gradio) : [http://localhost:7860](http://localhost:7860)
 
-![Aperçu de l’application](images/image.png)
+
+### Aperçu de la webapp
+![Aperçu de la webapp](images/image_webapp1.png)
+![Aperçu de la webapp](images/image_webapp2.png)
+### Aperçu de Airflow
+![Aperçu de Airflow](images/airflow_dag.png)
+### Aperçu de Mlflow
+![Aperçu de Mlflow](images/image_mlflow.png)
+
+

@@ -164,6 +164,8 @@ services:
   # Service Minio pour le stockage S3 (images)
   minio:
     image: minio/minio:latest
+    env_file:
+      - ../../.env
     command: server /data --console-address ":9001"
     networks:
       - mlops_net
@@ -188,6 +190,8 @@ services:
     image: ghcr.io/mlflow/mlflow:latest
     networks:
       - mlops_net
+    env_file:
+      - ../../.env
     environment:
       MLFLOW_TRACKING_URI: http://0.0.0.0:5000
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
@@ -216,6 +220,8 @@ services:
     build:
       context: ../../src/api       
       dockerfile: Dockerfile    
+    env_file:
+      - ../../.env
     image: api:dev
     ports:
       - "8000:8000"
@@ -238,6 +244,8 @@ services:
     build:
       context: ../../src/webapp     
       dockerfile: Dockerfile
+    env_file:
+      - ../../.env
     image: webapp:dev
     ports:
       - "7860:7860"
