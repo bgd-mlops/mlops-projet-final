@@ -1,56 +1,83 @@
 #!/usr/bin/env python3
 import sys
+import os
+import logging
+from dotenv import load_dotenv
 import psycopg2
+
+# ─── CHARGEMENT DU .env ─────────────────────────────────────────
+load_dotenv()
+
+# ─── CONFIGURATION DU LOGGING ─────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ─── VARIABLES D'ENVIRONNEMENT ────────────────────────────────
+target_db   = os.getenv("TARGET_DB_NAME")
+db_user     = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_host     = os.getenv("DB_HOST")
+db_port     = os.getenv("DB_PORT")
+
+# Base URL pour les images
+github_raw_base = os.getenv(
+    "GITHUB_RAW_BASE")
+labels = os.getenv("PLANT_LABELS", "dandelion,grass").split(",")
+images_per_label = int(os.getenv("IMAGES_PER_LABEL", "200"))
+
+
+def get_db_connection():
+    try:
+        conn = psycopg2.connect(
+            dbname=target_db,
+            user=db_user,
+            password=db_password,
+            host=db_host,
+            port=db_port
+        )
+        conn.autocommit = False
+        logger.info(f"Connecté à la base '{target_db}'")
+        return conn
+    except Exception as e:
+        logger.error(f"Échec de connexion à la base '{target_db}'", exc_info=e)
+        sys.exit(1)
 
 
 def insert_metadata():
-    conn = None
-    cur = None
-
-    # Tentative de connexion à la base métier "mlops_data"
-    try:
-        conn = psycopg2.connect(
-            # Base métier (assure-toi qu'elle est correcte)
-            dbname="mlops_data",
-            user="airflow",
-            password="airflow",
-            host="postgres",          # Nom du service dans Docker Compose
-            port="5432"               # Port interne de Postgres
-        )
-        print("Connexion à la base 'mlops_data' réussie.")
-    except Exception as e:
-        print("Erreur : Impossible de se connecter à la base 'mlops_data' :", e)
-        sys.exit(1)
+    """
+    Insère les URLs d'images dans la table plants_data si elles n'existent pas déjà.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
 
     try:
-        cur = conn.cursor()
-        labels = ["dandelion", "grass"]
         for label in labels:
-            for i in range(200):
-                url = f"https://raw.githubusercontent.com/btphan95/greenr-airflow/refs/heads/master/data/{label}/{i:08d}.jpg"
-                # Vérification si l'URL est déjà présente
+            for i in range(images_per_label):
+                url = f"{github_raw_base}/{label}/{i:08d}.jpg"
                 cur.execute(
-                    "SELECT 1 FROM plants_data WHERE url_source = %s", (url,))
+                    "SELECT 1 FROM plants_data WHERE url_source = %s", (url,)
+                )
                 if cur.fetchone() is None:
                     cur.execute(
                         "INSERT INTO plants_data (url_source, url_s3, label) VALUES (%s, %s, %s)",
                         (url, None, label)
                     )
-                    print(f"Insertion de {url} effectuée.")
+                    logger.info(f"Inséré: {url}")
                 else:
-                    print(
-                        f"Données pour {url} existent déjà, insertion ignorée.")
+                    logger.debug(f"Exist: {url}")
         conn.commit()
-        print("Insertion des métadonnées terminée avec succès.")
+        logger.info("Insertion des métadonnées terminée avec succès.")
     except Exception as e:
-        print("Erreur lors de l'insertion des métadonnées :", e)
+        logger.error("Erreur lors de l'insertion des métadonnées", exc_info=e)
+        conn.rollback()
         sys.exit(1)
     finally:
-        if cur is not None:
-            cur.close()
-        if conn is not None:
-            conn.close()
-
+        cur.close()
+        conn.close()
+        logger.info("Connexion fermée.")
 
 if __name__ == "__main__":
     insert_metadata()

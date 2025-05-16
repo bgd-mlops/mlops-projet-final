@@ -1,52 +1,71 @@
 #!/usr/bin/env python3
 import sys
+import os
+import logging
+from dotenv import load_dotenv
 import psycopg2
 
+# ─── CHARGEMENT DU .env ─────────────────────────────────────────
+load_dotenv()
+
+# ─── CONFIGURATION DU LOGGING ─────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ─── VARIABLES D'ENVIRONNEMENT ────────────────────────────────
+target_db   = os.getenv("TARGET_DB_NAME")
+db_user      = os.getenv("DB_USER")
+db_password  = os.getenv("DB_PASSWORD")
+db_host      = os.getenv("DB_HOST")
+db_port      = os.getenv("DB_PORT")
+
+CREATE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS plants_data (
+    id SERIAL PRIMARY KEY,
+    url_source TEXT NOT NULL UNIQUE,
+    url_s3    TEXT UNIQUE,
+    label     VARCHAR(50) NOT NULL
+);
+"""
 
 def create_plants_table():
-    target_db = "mlops_data"
-
+    """
+    Connecte à la base target_db et crée la table plants_data si elle n'existe pas.
+    """
     conn = None
     cur = None
 
-    # Tenter de se connecter à la base mlops_data
+    # Connexion à la base
     try:
         conn = psycopg2.connect(
             dbname=target_db,
-            user="airflow",
-            password="airflow",
-            host="postgres",   # Le nom du service dans Docker Compose
-            port="5432"        # Port interne de Postgres
+            user=db_user,
+            password=db_password,
+            host=db_host,
+            port=db_port
         )
-        print(f"Connexion à la base '{target_db}' réussie.")
+        logger.info(f"Connexion à la base '{target_db}' réussie.")
     except Exception as e:
-        print(
-            f"Erreur : Impossible de se connecter à la base '{target_db}' :", e)
+        logger.error(f"Erreur de connexion à la base '{target_db}'", exc_info=e)
         sys.exit(1)
 
     try:
         cur = conn.cursor()
-        create_table_sql = """
-            CREATE TABLE IF NOT EXISTS plants_data (
-                id SERIAL PRIMARY KEY,
-                url_source TEXT NOT NULL UNIQUE,   -- Unicité sur url_source
-                url_s3 TEXT UNIQUE,                -- Unicité sur url_s3
-                label VARCHAR(50) NOT NULL
-            );
-        """
-        cur.execute(create_table_sql)
+        cur.execute(CREATE_TABLE_SQL)
         conn.commit()
-        print(
-            f"Table plants_data créée avec succès dans la base '{target_db}'.")
+        logger.info(f"Table 'plants_data' créée ou déjà existante dans '{target_db}'.")
     except Exception as e:
-        print("Erreur lors de la création de la table plants_data :", e)
+        logger.error("Erreur lors de la création de la table 'plants_data'", exc_info=e)
         sys.exit(1)
     finally:
-        if cur is not None:
+        if cur:
             cur.close()
-        if conn is not None:
+        if conn:
             conn.close()
-
+        logger.info("Fermeture de la connexion à la base")
 
 if __name__ == "__main__":
     create_plants_table()

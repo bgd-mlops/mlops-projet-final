@@ -1,143 +1,162 @@
 #!/usr/bin/env python3
 import sys
 import os
+import logging
+from dotenv import load_dotenv
 import psycopg2
 import requests
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
+# ─── CHARGEMENT DU .env ─────────────────────────────────────────
+load_dotenv()
 
-def download_and_upload_pictures():
-    # Étape 1 : Connexion à la base "mlops_data"
+# ─── CONFIGURATION DU LOGGING ─────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ─── VARIABLES D'ENVIRONNEMENT ────────────────────────────────
+# Base de données
+target_db   = os.getenv("TARGET_DB_NAME")
+db_user     = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_host     = os.getenv("DB_HOST")
+db_port     = os.getenv("DB_PORT")
+
+# Minio / S3
+s3_endpoint = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+aws_key     = os.getenv("AWS_ACCESS_KEY_ID")
+aws_secret  = os.getenv("AWS_SECRET_ACCESS_KEY")
+bucket_name = os.getenv("BUCKET_NAME", "images")
+
+def get_db_connection():
+    """
+    Retourne une connexion psycopg2 configurée pour la base target_db.
+    """
     try:
         conn = psycopg2.connect(
-            dbname="mlops_data",      # La base métier
-            user="airflow",
-            password="airflow",
-            host="postgres",          # Nom du service dans Docker
-            # Port interne (communication dans le réseau Docker)
-            port="5432"
+            dbname=target_db,
+            user=db_user,
+            password=db_password,
+            host=db_host,
+            port=db_port
         )
-        print("Connexion à la base 'mlops_data' réussie.")
+        conn.autocommit = False
+        logger.info(f"Connecté à la base '{target_db}'")
+        return conn
     except Exception as e:
-        print("Erreur de connexion à la base 'mlops_data':", e)
+        logger.error(f"Échec de connexion à la base '{target_db}'", exc_info=e)
         sys.exit(1)
 
-    cur = None
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT id, url_source, label FROM plants_data WHERE url_s3 IS NULL")
-        rows = cur.fetchall()
-        print(f"{len(rows)} images à traiter.")
-    except Exception as e:
-        print("Erreur lors de la récupération des enregistrements:", e)
-        if cur is not None:
-            cur.close()
-        conn.close()
-        sys.exit(1)
 
-    # Étape 2 : Connexion à Minio via boto3 dans le réseau Docker (utiliser le nom du service)
+def get_s3_client():
+    """
+    Retourne un client boto3 configuré pour Minio/S3.
+    """
     try:
-        s3 = boto3.client(
+        client = boto3.client(
             's3',
-            endpoint_url="http://minio:9000",  # Utilise le nom du service Minio dans Docker
-            aws_access_key_id="minio",
-            aws_secret_access_key="minio123",
+            endpoint_url=s3_endpoint,
+            aws_access_key_id=aws_key,
+            aws_secret_access_key=aws_secret,
             config=Config(signature_version='s3v4'),
-            region_name="us-east-1"
+            region_name=os.getenv("AWS_REGION", "us-east-1")
         )
+        logger.info("Client S3 initialisé")
+        return client
     except Exception as e:
-        print("Erreur de connexion à Minio:", e)
-        cur.close()
-        conn.close()
+        logger.error("Échec de l'initialisation du client S3", exc_info=e)
         sys.exit(1)
 
-    bucket_name = "images"
-    # Vérification de l'existence du bucket et création si nécessaire
+
+def ensure_bucket_exists(s3):
+    """
+    Vérifie si le bucket existe, sinon le crée.
+    """
     try:
         s3.head_bucket(Bucket=bucket_name)
-        print(f"Bucket '{bucket_name}' existe déjà.")
+        logger.info(f"Bucket '{bucket_name}' existe déjà")
     except ClientError as e:
-        print(
-            f"Bucket '{bucket_name}' n'existe pas, tentative de création...", e)
-        try:
-            s3.create_bucket(Bucket=bucket_name)
-            print(f"Bucket '{bucket_name}' créé avec succès.")
-        except Exception as e2:
-            print(f"Erreur lors de la création du bucket '{bucket_name}':", e2)
-            cur.close()
-            conn.close()
+        code = e.response.get('Error', {}).get('Code')
+        if code in ('404', 'NoSuchBucket'):
+            try:
+                s3.create_bucket(Bucket=bucket_name)
+                logger.info(f"Bucket '{bucket_name}' créé")
+            except Exception as e2:
+                logger.error(f"Impossible de créer le bucket '{bucket_name}'", exc_info=e2)
+                sys.exit(1)
+        else:
+            logger.error(f"Erreur head_bucket pour '{bucket_name}'", exc_info=e)
             sys.exit(1)
 
-    # Étape 3 : Traiter chaque enregistrement
-    for row in rows:
-        record_id, url_source, label = row
-        print(f"Traitement de l'image {record_id} : {url_source}")
+
+def download_and_upload_pictures():
+    """
+    Télécharge les images non uploadées depuis plants_data,
+    les stocke dans S3, et met à jour la base avec l'URL.
+    """
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    # Récupérer les enregistrements sans url_s3
+    try:
+        cur.execute(
+            "SELECT id, url_source, label FROM plants_data WHERE url_s3 IS NULL"
+        )
+        rows = cur.fetchall()
+        logger.info(f"{len(rows)} images à traiter")
+    except Exception as e:
+        logger.error("Erreur récupération enregistrements", exc_info=e)
+        conn.close()
+        sys.exit(1)
+
+    s3 = get_s3_client()
+    ensure_bucket_exists(s3)
+
+    for record_id, url_source, label in rows:
+        logger.info(f"Traitement id={record_id}, url={url_source}")
         try:
-            response = requests.get(url_source)
-            if response.status_code == 200:
-                image_data = response.content
-                filename = os.path.basename(url_source)
-                key = f"{label}/{filename}"
-                # Vérifier si l'image existe déjà dans Minio
-                try:
-                    s3.head_object(Bucket=bucket_name, Key=key)
-                    # Si head_object réussit, cela signifie que l'image existe déjà.
-                    print(
-                        f"L'image {record_id} existe déjà dans le bucket '{bucket_name}'.")
-                    minio_url = f"http://minio:9000/{bucket_name}/{key}"
-                    # Mettre à jour la BD avec l'URL s'il n'est pas encore renseigné
-                    try:
-                        cur.execute(
-                            "UPDATE plants_data SET url_s3 = %s WHERE id = %s", (minio_url, record_id))
-                        conn.commit()
-                        print(
-                            f"Base mise à jour pour l'image {record_id} avec l'URL {minio_url}.")
-                    except Exception as e:
-                        print(
-                            f"Erreur lors de la mise à jour DB pour l'image {record_id} : {e}")
-                    continue  # Passer à l'image suivante
-                except ClientError as ce:
-                    # Si l'erreur est NotFound, l'image n'existe pas et il faut l'uploader
-                    error_code = ce.response['Error']['Code']
-                    if error_code != '404':
-                        print(
-                            f"Erreur lors de la vérification de l'image {record_id} : {ce}")
-                        continue
+            resp = requests.get(url_source, timeout=10)
+            resp.raise_for_status()
+            data = resp.content
+            filename = os.path.basename(url_source)
+            key = f"{label}/{filename}"
 
-                # L'image n'existe pas, procéder à l'upload
-                try:
-                    s3.put_object(Bucket=bucket_name, Key=key, Body=image_data)
-                    print(f"Image {record_id} uploadée sur Minio.")
-                except Exception as e:
-                    print(
-                        f"Erreur lors de l'upload de l'image {record_id}: {e}")
+            # Vérifier et uploader
+            try:
+                s3.head_object(Bucket=bucket_name, Key=key)
+                logger.info(f"Objet '{key}' existe déjà")
+            except ClientError as ce:
+                if ce.response['Error']['Code'] in ('404', 'NoSuchKey'):
+                    s3.put_object(Bucket=bucket_name, Key=key, Body=data)
+                    logger.info(f"Upload de '{key}' réussi")
+                else:
+                    logger.error(f"Erreur head_object pour '{key}'", exc_info=ce)
                     continue
 
-                # Mettre à jour l'URL dans la base de données
-                minio_url = f"http://minio:9000/{bucket_name}/{key}"
-                try:
-                    cur.execute(
-                        "UPDATE plants_data SET url_s3 = %s WHERE id = %s", (minio_url, record_id))
-                    conn.commit()
-                    print(
-                        f"Image {record_id} mise à jour dans la BD avec l'URL {minio_url}.")
-                except Exception as e:
-                    print(
-                        f"Erreur lors de la mise à jour de la BD pour l'image {record_id}: {e}")
-                    continue
-            else:
-                print(
-                    f"Erreur de téléchargement {url_source}: code {response.status_code}")
-        except Exception as ex:
-            print(f"Erreur lors du traitement de {url_source}: {ex}")
+            # Mettre à jour la BDD
+            url_s3 = f"{s3_endpoint}/{bucket_name}/{key}"
+            try:
+                cur.execute(
+                    "UPDATE plants_data SET url_s3 = %s WHERE id = %s",
+                    (url_s3, record_id)
+                )
+                conn.commit()
+                logger.info(f"Mise à jour BDD id={record_id} url_s3={url_s3}")
+            except Exception as e:
+                logger.error(f"Erreur update BDD id={record_id}", exc_info=e)
+                conn.rollback()
+        except Exception as e:
+            logger.error(f"Erreur traitement id={record_id}", exc_info=e)
+            continue
 
-    # Nettoyage des ressources
     cur.close()
     conn.close()
-    print("Traitement terminé.")
+    logger.info("Traitement terminé")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-# src/api/main.py
 import os
 import io
+from dotenv import load_dotenv
+import logging
 
 from fastapi import FastAPI, File, HTTPException
 from fastapi.responses import JSONResponse
@@ -9,54 +10,87 @@ import torch
 import torchvision.transforms as T
 import mlflow.pytorch
 
+# ─── CHARGEMENT DU .env ─────────────────────────────────────────
+# Charge les variables d'environnement depuis le fichier .env
+load_dotenv()
+
 # ─── CONFIGURATION ─────────────────────────────────────────
-# (MLflow va déduire le tracking URI, l’endpoint S3 et les creds AWS
-#  à partir des vars d’environnement)
-os.environ.setdefault("MLFLOW_TRACKING_URI",    "http://mlflow:5000")
-os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", "http://minio:9000")
-os.environ.setdefault("AWS_ACCESS_KEY_ID",      "minio")
-os.environ.setdefault("AWS_SECRET_ACCESS_KEY",  "minio123")
+mlflow_tracking_uri    = os.getenv("MLFLOW_TRACKING_URI")
+mlflow_s3_endpoint_url = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+aws_access_key_id      = os.getenv("AWS_ACCESS_KEY_ID")
+aws_secret_access_key  = os.getenv("AWS_SECRET_ACCESS_KEY")
+model_name             = os.getenv("MLFLOW_MODEL_NAME", "DandelionGrassModel")
+model_stage            = os.getenv("MLFLOW_MODEL_STAGE", "Production")
+model_uri              = f"models:/{model_name}/{model_stage}"
 
-# Nom et stage du modèle à charger (via env vars si vous voulez changer en dev/test)
-MODEL_NAME  = os.getenv("MLFLOW_MODEL_NAME",  "DandelionGrassModel")
-MODEL_STAGE = os.getenv("MLFLOW_MODEL_STAGE", "Production")
-MODEL_URI   = f"models:/{MODEL_NAME}/{MODEL_STAGE}"
+# Définition des variables pour MLflow et AWS
+if mlflow_tracking_uri:
+    os.environ["MLFLOW_TRACKING_URI"] = mlflow_tracking_uri
+if mlflow_s3_endpoint_url:
+    os.environ["MLFLOW_S3_ENDPOINT_URL"] = mlflow_s3_endpoint_url
+if aws_access_key_id:
+    os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
+if aws_secret_access_key:
+    os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
 
-# ─── CHARGEMENT DU MODÈLE ───────────────────────────────────
+# ─── CONFIGURATION DU LOGGING ─────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ─── CHARGEMENT DU MODÈLE ─────────────────────────────────────
 try:
-    model = mlflow.pytorch.load_model(MODEL_URI)
+    model = mlflow.pytorch.load_model(model_uri)
     model.eval()
-    print(f" Modèle chargé depuis « {MODEL_URI} »")
+    logger.info(f"Modèle chargé depuis: {model_uri}")
 except Exception as e:
-    # On plante immédiatement si la version n’est pas dispo
-    raise RuntimeError(f"Impossible de charger le modèle {MODEL_URI}: {e}")
+    logger.error(f"Impossible de charger le modèle {model_uri}", exc_info=e)
+    raise RuntimeError(f"Impossible de charger le modèle {model_uri}: {e}")
 
-# ─── PRÉTRAITEMENT ───────────────────────────────────────────
+# ─── PRÉTRAITEMENT ─────────────────────────────────────────────
 transform = T.Compose([
     T.Resize((224, 224)),
     T.ToTensor(),
     T.Normalize(mean=[.485, .456, .406], std=[.229, .224, .225]),
 ])
 
-# ─── APPLICATION FASTAPI ────────────────────────────────────
+# ─── APPLICATION FASTAPI ──────────────────────────────────────
 app = FastAPI(title="Dandelion vs Grass")
 
 @app.post("/predict")
 async def predict(file: bytes = File(...)):
+    """
+    Endpoint pour la prédiction : reçoit une image en bytes,
+    effectue le prétraitement, l'inférence et renvoie le label.
+    """
     # Lecture de l’image
     try:
         img = Image.open(io.BytesIO(file)).convert("RGB")
-    except Exception:
+        logger.debug("Image reçue et convertie en RGB")
+    except Exception as e:
+        logger.error("Erreur de lecture de l'image", exc_info=e)
         raise HTTPException(status_code=400, detail="Image invalide")
 
-    # Inference
+    # Prétraitement
     x = transform(img).unsqueeze(0)
-    with torch.no_grad():
-        out = model(x)
+    logger.debug("Prétraitement de l'image terminé")
+
+    # Inference
+    try:
+        with torch.no_grad():
+            out = model(x)
         label = "dandelion" if out.argmax(1).item() == 0 else "grass"
+        logger.info(f"Prédiction réalisée : {label}")
+    except Exception as e:
+        logger.error("Erreur interne lors de l'inférence", exc_info=e)
+        raise HTTPException(status_code=500, detail="Erreur interne lors de l'inférence")
 
     return JSONResponse({"prediction": label})
 
 @app.get("/health")
 def health():
+    """Vérifie l'état de l'API."""
+    logger.info("Check health endpoint")
     return {"status": "ok"}
