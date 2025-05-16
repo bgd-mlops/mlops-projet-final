@@ -51,12 +51,12 @@ Plusieurs micro-services s’exécutent déjà correctement dans le cluster ; To
 
 6. Organisation de Git : 
 
-.env à la racine : Toutes les variables d’environnement (MLflow).
-infra/ : définitions d’infrastructure
+- .env à la racine : Toutes les variables d’environnement (MLflow).
+- infra/ : définitions d’infrastructure
 - infra/dev/ : Docker Compose et scripts d’initialisation (BDD, index, etc.) pour le développement local
 - infra/prod/helm/ : Helm charts et manifests Kubernetes pour la production
-src/ : code applicatif
+- src/ : code applicatif
 - src/api/ : service FastAPI
 - src/webapp/ : interface utilisateur (Gradio)
-logs/ : fichiers de logs générés localement (à ajouter dans .gitignore)
-.github/workflows/ : pipelines CI/CD GitHub Actions pour la construction, les tests et le déploiement des services.
+- logs/ : fichiers de logs générés localement (à ajouter dans .gitignore)
+- .github/workflows/ : pipelines CI/CD GitHub Actions pour la construction, les tests et le déploiement des services.
