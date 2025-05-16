@@ -1,7 +1,26 @@
-# mlops_classification_project
+# Projet MLOps Classification
 
-# Lancer dockercompose
+Ce dépôt contient un projet de classification d’images permettant de distinguer entre **dandelion** (pissenlit) et **grass** (herbe).
 
-cd /infra/dev
+## Prérequis
 
-docker-compose up -d --build
+- Docker et Docker Compose installés sur votre machine.
+
+## Démarrage de l’infrastructure
+
+1. Ouvrez un terminal et placez-vous dans le dossier du projet :
+
+   ```bash
+   cd infra/dev
+
+2. Lancez l’infrastructure avec Docker Compose :
+
+    docker-compose up -d --build
+
+3. Démarrez la DAG "full_pipeline" dans Airflow 
+
+    Accédez aux différentes interfaces :
+        Interface Airflow : http://localhost:8080
+        Web app de classification (Gradio) : http://localhost:7860
+
+![Aperçu de l’application](images/image.png)
