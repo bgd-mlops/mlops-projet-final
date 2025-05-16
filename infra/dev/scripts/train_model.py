@@ -1,161 +1,178 @@
+#!/usr/bin/env python3
 import sys
 import os
-
-# Add the project root directory to the system path so that 'model' and 'data_loader' can be imported
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.', 'ml')))
+import logging
+from datetime import datetime
+from dotenv import load_dotenv
 
 import torch
 from tqdm import tqdm
-import os
-import io
+import mlflow
+import mlflow.pytorch
 from mlflow.tracking import MlflowClient
-
+import boto3
+from botocore.client import Config
+from airflow.decorators import task
 
 from ml.model import build_model
 from ml.data_loader import get_dataloaders
 
-import mlflow
-import mlflow.pytorch
-from airflow.decorators import task
-import boto3
-from datetime import datetime
-from botocore.client import Config
+# ─── CHARGEMENT DU .env ─────────────────────────────────────────
+load_dotenv()
+
+# ─── CONFIGURATION DU LOGGING ─────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+# ─── VARIABLES D'ENVIRONNEMENT ────────────────────────────────
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
+MLFLOW_S3_ENDPOINT_URL = os.getenv("MLFLOW_S3_ENDPOINT_URL")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+BUCKET_NAME = os.getenv("MLFLOW_S3_BUCKET", "mlflow-artifacts")
+EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT", "my_training_experiment")
+
+# Ne pas hardcoder les URIs dans le code
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_experiment(EXPERIMENT_NAME)
 
 
-os.environ['MLFLOW_TRACKING_URI'] = 'http://mlflow:5000'
-os.environ['MLFLOW_S3_ENDPOINT_URL'] = 'http://minio:9000'
-os.environ['AWS_ACCESS_KEY_ID'] = 'minio'
-os.environ['AWS_SECRET_ACCESS_KEY'] = 'minio123'
-    
-# ------------------------------------------
-# Create bcket S3 to save model
-def create_s3_bucket(bucket_name):
+def get_s3_client():
+    """
+    Initialise et retourne un client S3/MinIO configuré.
+    """
     try:
-        s3 = boto3.client(
+        client = boto3.client(
             's3',
-            endpoint_url="http://minio:9000",  
-            aws_access_key_id="minio",
-            aws_secret_access_key="minio123",
+            endpoint_url=MLFLOW_S3_ENDPOINT_URL,
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
             config=Config(signature_version='s3v4'),
-            region_name="us-east-1"
+            region_name=AWS_REGION
         )
+        logger.info("Client S3 initialisé")
+        return client
     except Exception as e:
-        print("Erreur de connexion à Minio:", e)
+        logger.error("Échec de l'initialisation du client S3", exc_info=e)
+        sys.exit(1)
 
-    # Check if the bucket exists
+
+def ensure_bucket(client, bucket_name):
+    """
+    Vérifie si le bucket existe, sinon le crée.
+    """
     try:
-        s3.head_bucket(Bucket=bucket_name)
-        print(f"Bucket {bucket_name} already exists.")
-    except Exception as e:
-        # If the bucket doesn't exist, create it
-        print(f"Bucket {bucket_name} does not exist. Creating...")
-        s3.create_bucket(Bucket=bucket_name)
-        print(f"Bucket {bucket_name} created.")
+        client.head_bucket(Bucket=bucket_name)
+        logger.info(f"Bucket '{bucket_name}' existe déjà")
+    except Exception:
+        logger.info(f"Création du bucket '{bucket_name}'")
+        try:
+            client.create_bucket(Bucket=bucket_name)
+            logger.info(f"Bucket '{bucket_name}' créé")
+        except Exception as e:
+            logger.error(f"Erreur de création du bucket '{bucket_name}'", exc_info=e)
+            sys.exit(1)
 
 
-# ------------------------------------------
-# Training Function
-def train_model(epochs=1, lr=1e-4):
+@task
+def train_model(epochs: int = 1, lr: float = 1e-4):
+    """
+    Entraîne le modèle et le publie sur MLflow avec gestion du Model Registry.
+    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logger.info(f"Utilisation du device: {device}")
 
+    # Préparation modèle et data
     model, criterion, optimizer = build_model(lr=lr, device=device)
     train_loader, val_loader = get_dataloaders()
+
+    s3 = get_s3_client()
+    ensure_bucket(s3, BUCKET_NAME)
+
     best_val_acc = 0.0
-    best_model_state = None
+    best_state = None
 
-    # Setup MLflow tracking
-    mlflow.set_tracking_uri("http://mlflow:5000")  
-    mlflow.set_experiment("my_training_experiment")
-
-    with mlflow.start_run(run_name=f"train_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"):
-        mlflow.log_params({
-            "epochs": epochs,
-            "lr": lr,
-            "optimizer": "Adam"
-        })
-
-        bucket_name = "mlflow-artifacts"
-
-        create_s3_bucket(bucket_name)
+    run_name = f"train_{datetime.now():%Y-%m-%d_%H-%M-%S}"
+    with mlflow.start_run(run_name=run_name):
+        mlflow.log_params({"epochs": epochs, "lr": lr, "optimizer": optimizer.__class__.__name__})
 
         for epoch in range(epochs):
-            print(f"\nEpoch {epoch+1}/{epochs}")
+            logger.info(f"Début de l'époque {epoch+1}/{epochs}")
+            # Phase d'entraînement
             model.train()
-            train_loss, train_correct = 0.0, 0
-
-            for images, labels in tqdm(train_loader, desc="Training"):
-                images, labels = images.to(device), labels.to(device)
+            train_loss = 0.0
+            train_correct = 0
+            for imgs, labels in tqdm(train_loader, desc="Training"):
+                imgs, labels = imgs.to(device), labels.to(device)
                 optimizer.zero_grad()
-                outputs = model(images)
+                outputs = model(imgs)
                 loss = criterion(outputs, labels)
                 loss.backward()
                 optimizer.step()
 
-                train_loss += loss.item() * images.size(0)
+                train_loss += loss.item() * imgs.size(0)
                 train_correct += (outputs.argmax(1) == labels).sum().item()
 
-            train_acc = train_correct / len(train_loader.dataset)
-            train_loss /= len(train_loader.dataset)
-
-            # Validation phase
+            # Phase de validation
+            val_loss = 0.0
+            val_correct = 0
             model.eval()
-            val_loss, val_correct = 0.0, 0
             with torch.no_grad():
-                for images, labels in tqdm(val_loader, desc="Validating"):
-                    images, labels = images.to(device), labels.to(device)
-                    outputs = model(images)
+                for imgs, labels in tqdm(val_loader, desc="Validating"):
+                    imgs, labels = imgs.to(device), labels.to(device)
+                    outputs = model(imgs)
                     loss = criterion(outputs, labels)
-                    val_loss += loss.item() * images.size(0)
+                    val_loss += loss.item() * imgs.size(0)
                     val_correct += (outputs.argmax(1) == labels).sum().item()
 
-            val_acc = val_correct / len(val_loader.dataset)
-            val_loss /= len(val_loader.dataset)
+            # Calcul métriques
+            n_train = len(train_loader.dataset)
+            n_val = len(val_loader.dataset)
+            train_loss /= n_train
+            train_acc = train_correct / n_train
+            val_loss /= n_val
+            val_acc = val_correct / n_val
 
-            print(f"Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}")
-            print(f"Val   Loss: {val_loss:.4f}, Val   Acc: {val_acc:.4f}")
+            logger.info(f"Train loss: {train_loss:.4f}, acc: {train_acc:.4f}")
+            logger.info(f"Val   loss: {val_loss:.4f}, acc: {val_acc:.4f}")
 
-            mlflow.log_metrics({
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "val_loss": val_loss,
-                "val_acc": val_acc
-            }, step=epoch)
+            mlflow.log_metrics(
+                {"train_loss": train_loss, "train_acc": train_acc,
+                 "val_loss": val_loss, "val_acc": val_acc},
+                step=epoch
+            )
 
-            # Save best model directly to MLflow (no disk saving)
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
-                best_model_state = model.state_dict()
+                best_state = model.state_dict()
 
-        # Load best model and log it to MLflow (directly to S3/MinIO)
-        model.load_state_dict(best_model_state)
+        # Logging du meilleur modèle
+        model.load_state_dict(best_state)
         scripted = torch.jit.script(model)
         mlflow.pytorch.log_model(
             pytorch_model=scripted,
-            artifact_path="model",
-            code_paths=None  
+            artifact_path="model"
         )
+
         run_id = mlflow.active_run().info.run_id
-        logged_model_uri = f"runs:/{run_id}/model"
+        model_uri = f"runs:/{run_id}/model"
 
-        # 3. Enregistrer dans le Model Registry
-        model_name = "DandelionGrassModel"
-        registered_model = mlflow.register_model(
-            logged_model_uri,
-            name=model_name
-        )
-
-        # 4. Promouvoir la version en Production
+        # Registry
         client = MlflowClient()
+        registered = client.create_registered_model(os.getenv("MLFLOW_MODEL_NAME")) if not client.get_registered_model(os.getenv("MLFLOW_MODEL_NAME"), False) else None
+        version = mlflow.register_model(model_uri, os.getenv("MLFLOW_MODEL_NAME"))
         client.transition_model_version_stage(
-            name=model_name,
-            version=registered_model.version,
+            name=os.getenv("MLFLOW_MODEL_NAME"),
+            version=version.version,
             stage="Production",
             archive_existing_versions=True
         )
+        logger.info(f"Modèle v{version.version} promu en Production")
 
-        print(f"Modèle version {registered_model.version} enregistré et promu en Production")
-# ------------------------------------------
-# Run standalone
+
 if __name__ == "__main__":
     train_model()
